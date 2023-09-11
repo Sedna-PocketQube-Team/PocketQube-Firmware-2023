@@ -21,8 +21,8 @@
 // UART
 #define UART_ID uart0
 #define BAUD_RATE 115200
-#define UART_TX_PIN 0 // We are using pins 0 and 1, but see the GPIO function select table in the
-#define UART_RX_PIN 1 // datasheet for information on which other pins can be used.
+#define UART_TX_PIN 0 
+#define UART_RX_PIN 1
 #define BUFFER_SIZE 6
 
 int8_t state = -1;
@@ -150,9 +150,13 @@ int main() {
     pio_sm_set_enabled(pio, sm, true);
 
 
+
+    // buzzer test
+
+    /*
     while (1) {
 
-        /*for(int buzHz=100; buzHz <= 2000; buzHz+=100) {
+        for(int buzHz=100; buzHz <= 2000; buzHz+=100) {
             div = (float)clock_get_hz(clk_sys) / ((float)(buzHz)*200.0);
             pio_sm_set_clkdiv(pio, sm, div);
             printf("Freq: %.2f Hz\n", (float)buzHz);
@@ -164,7 +168,7 @@ int main() {
             sleep_ms(500);
             pio_sm_set_enabled(pio, sm, false);
             sleep_ms(500);
-        }*/
+        }
 
         // alarm: 800 Hz, 1550 Hz
 
@@ -190,16 +194,17 @@ int main() {
 
 
         // buz = d/200
-        /*for(int buzHz=100; buzHz <= 10000; buzHz+=1) {
+        for(int buzHz=100; buzHz <= 10000; buzHz+=1) {
             div = (float)clock_get_hz(clk_sys) / ((float)(buzHz)*200.0);
             pio_sm_set_clkdiv(pio, sm, div);
             printf("Freq: %.2f Hz\n", (float)buzHz);
             sleep_ms(10);
-        }*/
+        }
     }
+    */
 
     
-    /*while(1) {
+    while(1) {
         if (uart_is_readable(UART_ID)) {
             uart_read_blocking(UART_ID, mybuf+buf_idx, 1);
             buf_idx += 1;
@@ -313,7 +318,7 @@ int main() {
             dma_rx 	= dma_claim_unused_channel(true);   
             statemillis = to_ms_since_boot((get_absolute_time())); 
         }
-    }*/
+    }
 
     return 0;
 }
