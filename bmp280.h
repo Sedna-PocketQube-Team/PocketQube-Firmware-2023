@@ -95,7 +95,7 @@ struct bmp280_calib_param {
 };
 
 #ifdef i2c_default
-void bmp280_init() ;
+//void bmp280_init() ;
 
 void bmp280_read_raw(int32_t* temp, int32_t* pressure) ;
 
@@ -103,13 +103,14 @@ void bmp280_reset() ;
 
 // intermediate function that calculates the fine resolution temperature
 // used for both pressure and temperature conversions
+/*
 int32_t bmp280_convert(int32_t temp, struct bmp280_calib_param* params) ;
 
 int32_t bmp280_convert_temp(int32_t temp, struct bmp280_calib_param* params) ;
 
 int32_t bmp280_convert_pressure(int32_t pressure, int32_t temp, struct bmp280_calib_param* params) ;
 
-void bmp280_get_calib_params(struct bmp280_calib_param* params) ;
+void bmp280_get_calib_params(struct bmp280_calib_param* params) ;*/
 
 #endif
 

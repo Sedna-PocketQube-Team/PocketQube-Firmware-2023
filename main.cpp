@@ -4,6 +4,7 @@
 #include "hardware/dma.h"
 #include "hardware/uart.h"
 #include "hardware/pio.h"
+#include "hardware/adc.h"
 #include "hardware/clocks.h"
 #include "pico/time.h"
 #include "string.h"
@@ -12,6 +13,7 @@
 #include "sd_card.h"
 #include "ff.h"
 #include "buzzer.pio.h"
+#include "LoRa-RP2040.h"
 
 // I2C
 #define I2C_HARDWARE_UNIT			(&i2c0_inst)
@@ -25,11 +27,35 @@
 #define UART_RX_PIN 1
 #define BUFFER_SIZE 6
 
+extern "C" void bmp280_init();
+extern "C" void bmp280_get_calib_params(bmp280_calib_param*);
+extern "C" int32_t bmp280_convert_temp(long, bmp280_calib_param*);
+extern "C" int32_t bmp280_convert_pressure(long, long, bmp280_calib_param*);
+
+
 int8_t state = -1;
 uint32_t statemillis = 0;
 
 int main() {
+    const int csPin = 5;          // LoRa radio chip select
+    const int resetPin = -1;        // LoRa radio reset
+    const int irqPin = 6;          // change for your board; must be a hardware interrupt pin
+
     stdio_init_all();
+    LoRa.setPins(csPin, resetPin, irqPin);
+
+    if (!LoRa.begin(915E6)) {         // initialize ratio at 915 MHz
+        
+        if (true) {
+            sleep_ms(3000);
+            printf("LoRa init failed. Check your connections.");                   // if failed, do nothing
+        }
+        ;
+    } else {
+        sleep_ms(5000);
+        LoRa.dumpRegisters();
+        while (true) ;
+    }
 
     // I2C Setup
     i2c_init(I2C_PORT, 400000);
@@ -72,14 +98,23 @@ int main() {
 
     int32_t raw_temperature;
     int32_t raw_pressure;
+    uint16_t raw_uv_adc;
+    
 
+    // UV Sensor - ADC init
+    adc_init();
+
+    // Make sure GPIO is high-impedance, no pullups etc
+    adc_gpio_init(26);
+    // Select ADC input 0 (GPIO26)
+    adc_select_input(0);
 
 
     static char cmd3[] = "$PMTK251,115200*1F\r\n"; // 115200 Baud Rate
 
     sleep_ms(250); // sleep so that data polling and register update don't collide
 
-    uart_write_blocking(UART_ID, cmd3, strlen(cmd3));
+    uart_write_blocking(UART_ID, (uint8_t*)cmd3, strlen(cmd3));
 
 
 
@@ -92,21 +127,21 @@ int main() {
 
     sleep_ms(1000); // sleep so that data polling and register update don't collide
 
-    uart_write_blocking(UART_ID, cmd, strlen(cmd));
+    uart_write_blocking(UART_ID, (uint8_t*)cmd, strlen(cmd));
 
 
     static char cmd2[] = "$PMTK220,100*2F\r\n"; // 10 Hz Updates
 
     sleep_ms(250); // sleep so that data polling and register update don't collide
 
-    uart_write_blocking(UART_ID, cmd2, strlen(cmd2));
+    uart_write_blocking(UART_ID, (uint8_t*)cmd2, strlen(cmd2));
 
    
     static char startlogging[] = "$PMTK185,0*22\r\n"; // 10 Hz Updates
 
     sleep_ms(250); // sleep so that data polling and register update don't collide
 
-    uart_write_blocking(UART_ID, startlogging, strlen(startlogging));
+    uart_write_blocking(UART_ID, (uint8_t*)startlogging, strlen(startlogging));
     /*static char verify[] = "$PMTK605*31\r\n";
 
     uart_write_blocking(UART_ID, verify, strlen(verify));*/
@@ -141,7 +176,8 @@ int main() {
     uint offset = pio_add_program(pio, &buzzer_program);
 
     // Calculate the PIO clock divider
-    float div = (float)clock_get_hz(clk_sys) / 500;
+    float div = (float)clock_get_hz(clk_sys) / ((float)(1000)*200.0);
+    //float div = (float)clock_get_hz(clk_sys) / 500;
 
     // Initialize the program using the helper function in our .pio file
     buzzer_program_init(pio, sm, offset, 15, div);
@@ -206,12 +242,12 @@ int main() {
     
     while(1) {
         if (uart_is_readable(UART_ID)) {
-            uart_read_blocking(UART_ID, mybuf+buf_idx, 1);
+            uart_read_blocking(UART_ID, (uint8_t*)(mybuf+buf_idx), 1);
             buf_idx += 1;
             if(buf_idx == 256 || mybuf[buf_idx-1] == '\n') {
                 mybuf[buf_idx-1] = '\0';
                 //printf("%d\n", buf_idx);
-                puts(mybuf);
+                //puts(mybuf);
                 buf_idx = 0;
 
                 // Open file for writing ()
@@ -240,9 +276,11 @@ int main() {
 
             rxbuf[0]=0;
 
+            // BME680 registers: https://cdn-shop.adafruit.com/product-files/3660/BME680.pdf
+
             txbuf[0] = REG_PRESSURE_MSB; //0xD0;
             txbuf[0] |= I2C_IC_DATA_CMD_RESTART_BITS;
-            txbuf[1] |= I2C_IC_DATA_CMD_RESTART_BITS;
+            //txbuf[1] |= I2C_IC_DATA_CMD_RESTART_BITS;
             
 
             for (size_t i = 1; i < BUFFER_SIZE+1; ++i) {
@@ -280,13 +318,20 @@ int main() {
                                     rxbuf,
                                     &i2c_get_hw(i2c0)->data_cmd,
                                     BUFFER_SIZE,
-                                    true);
+                                    true); // START
+            
+            raw_uv_adc = adc_read();
         } else if (state == 0 && !dma_channel_is_busy(dma_rx)) {
             
 
             int32_t raw_pressure = (rxbuf[0] << 12) | (rxbuf[1] << 4) | (rxbuf[2] >> 4);
             int32_t raw_temperature = (rxbuf[3] << 12) | (rxbuf[4] << 4) | (rxbuf[5] >> 4);
 
+            // BME 280 Extra humidity:
+            //int32_t raw_humidity = (rxbuf[6] << 8) | (rxbuf[7]);
+            
+
+            
             int32_t temperature = bmp280_convert_temp(raw_temperature, &params);
             int32_t pressure = bmp280_convert_pressure(raw_pressure, raw_temperature, &params);
 
@@ -295,13 +340,14 @@ int main() {
             dma_channel_unclaim(dma_rx);
             
             // Open file for writing ()
-            fr = f_open(&fil, "BMP280.txt", FA_WRITE | FA_OPEN_APPEND);
+            fr = f_open(&fil, "sensordata.csv", FA_WRITE | FA_OPEN_APPEND);
             if (fr != FR_OK) {
                 printf("ERROR: Could not open file (%d)\r\n", fr);
             }
 
             // Write something to file
-            ret = f_printf(&fil, "Pressure = %.3f kPa, Temp. = %.2f C\n", pressure / 1000.f, temperature / 100.f);
+            printf("%.3f, %.2f, %d\n", pressure / 1000.f, temperature / 100.f, raw_uv_adc);
+            ret = f_printf(&fil, "%.3f, %.2f, %d\n", pressure / 1000.f, temperature / 100.f, raw_uv_adc);
             if (ret < 0) {
                 printf("ERROR: Could not write to file (%d)\r\n", ret);
                 f_close(&fil);

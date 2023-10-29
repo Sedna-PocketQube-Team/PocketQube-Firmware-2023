@@ -14,13 +14,16 @@ pico_sdk_init()
 
 # add library
 add_subdirectory(lib/no-OS-FatFS-SD-SPI-RPi-Pico/FatFs_SPI)
+add_subdirectory(lib/pico-lora/src)
 
 # Executable source file
 add_executable(${PROJECT_NAME}
-    main.c
+    main.cpp
     hw_config.c
     bmp280.c
 )
+
+target_include_directories(${PROJECT_NAME} PUBLIC lib/pico-lora/src)
 
 # Create C header file with the name <pio program>.pio.h
 pico_generate_pio_header(${PROJECT_NAME}  
@@ -45,6 +48,7 @@ target_link_libraries(${PROJECT_NAME}
     hardware_dma
     hardware_irq
     FatFs_SPI
+    LoRa_pico_lib
 )
 
 # enable usb output, disable uart output
