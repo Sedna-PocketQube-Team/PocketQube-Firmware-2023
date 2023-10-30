@@ -17,6 +17,7 @@ limitations under the License.
 #include "main_functions.h"
 #include "pico/time.h"
 #include "model.h"
+#include "qubesettings.h"
 
 #include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/micro_error_reporter.h"
@@ -52,8 +53,10 @@ void HandleOutput(tflite::ErrorReporter* error_reporter, float x_value,
   //int32_t g_led_brightness = (int)(127.5f * (y_value + 1));
 
   // Log the current brightness value for display in the console.
+  #ifdef TENSORFLOW_LOG
   printf("\ntflite response: Pressure: %.2f Pa, Predicted Altitude: %.2f m\n", x_value, y_value);
-   
+  #endif 
+
   // By default the sine wave is too fast to see in the LED, so slow
   // down the whole program deliberately so it's more visible.
   sleep_ms(10);
@@ -103,7 +106,7 @@ void setup() {
 }
 
 // The name of this function is important for Arduino compatibility.
-void loop(float pressure) {
+float loop(float pressure) {
   // Calculate an x value to feed into the model. We compare the current
   // inference_count to the number of inferences per cycle to determine
   // our position within the range of possible x values the model was
@@ -121,7 +124,7 @@ void loop(float pressure) {
   if (invoke_status != kTfLiteOk) {
     TF_LITE_REPORT_ERROR(error_reporter, "Invoke failed on x: %f\n",
                          static_cast<double>(x));
-    return;
+    return -1;
   }
 
   // Obtain the output from model's output tensor
@@ -134,4 +137,7 @@ void loop(float pressure) {
   // the total number per cycle
   inference_count += 1;
   if (inference_count >= kInferencesPerCycle) inference_count = 0;
+
+  // return predicted altitude
+  return y;
 }

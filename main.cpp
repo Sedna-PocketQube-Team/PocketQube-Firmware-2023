@@ -13,6 +13,7 @@
 
 #include "string.h"
 
+#include "qubesettings.h"
 #include "bmp280.h"
 #include "sd_card.h"
 #include "ff.h"
@@ -51,24 +52,35 @@ int32_t raw_pressure;
 uint16_t raw_uv_adc;
 int32_t temperature;
 int32_t pressure;
+int32_t pressure_tfpredicted;
+float altitude_tfpredicted;
 auto_init_mutex(pressureTfMtx); // Create a mutex that protects the "pressure" variable from being accessed by 2 threads (tensorflow and main code) at the same time
+auto_init_mutex(predictionTfMtx); // Create a mutex that protects the inference results from being accessed by 2 threads (tensorflow and main code) at the same time
 
 
 int8_t state = -1;
+int32_t filesystemerrcnt = 0;
 uint32_t statemillis = 0;
 
 void core1_loop() {
     while (true) {
         // make a copy of the current pressure (so that the inference doesn't block saving data)
         mutex_enter_blocking(&pressureTfMtx);
-        int32_t pressure_tfcopy = pressure;
+        float pressure_tfcopy = (float)pressure;
         mutex_exit(&pressureTfMtx);
 
         // run tensorflow
-        loop(pressure_tfcopy);
+        float altitude_tfcopy = loop(pressure_tfcopy);
 
-        // wait 1 second
-        sleep_ms(1000);
+        if (altitude_tfcopy != -1) {
+            mutex_enter_blocking(&predictionTfMtx);
+            pressure_tfpredicted = pressure_tfcopy;
+            altitude_tfpredicted = altitude_tfcopy;
+            mutex_exit(&predictionTfMtx);
+        }
+
+        // wait 800ms
+        sleep_ms(800);
     }
 }
 
@@ -171,13 +183,15 @@ int main() {
     FRESULT fr;
     FATFS fs;
     FIL fil;
+    FILINFO fno;
+
+
     int ret;
     char buf[100];
 
     // Initialize SD card
     if (!sd_init_driver()) {
         printf("ERROR: Could not initialize SD card\r\n");
-        while (true);
     }
 
     // Mount drive
@@ -270,19 +284,45 @@ int main() {
     */
 
     while(1) {
+        if (filesystemerrcnt > 10) {
+            printf("Resetting SD Card\r\n");
+
+            //card_initialized = false;
+            f_unmount("0:");
+
+            // Initialize SD card
+            if (!sd_init_driver()) {
+                printf("ERROR: Could not initialize SD card\r\n");
+            }
+
+            // Mount drive
+            fr = f_mount(&fs, "0:", 1);
+            if (fr != FR_OK) {
+                printf("ERROR: Could not mount filesystem (%d)\r\n", fr);
+            }
+
+            filesystemerrcnt = 0;
+            sleep_ms(3000);
+        }
+
         if (uart_is_readable(UART_ID)) {
             uart_read_blocking(UART_ID, (uint8_t*)(gpsbuf+buf_idx), 1);
             buf_idx += 1;
             if(buf_idx == 256 || gpsbuf[buf_idx-1] == '\n') {
                 gpsbuf[buf_idx-1] = '\0';
-                //printf("%d\n", buf_idx);
-                //puts(gpsbuf);
+                
+                #ifdef VERBOSE_SENSOR_LOG
+                puts(gpsbuf);
+                #endif
                 buf_idx = 0;
 
                 // Open file for writing ()
+
                 fr = f_open(&fil, "GPS.txt", FA_WRITE | FA_OPEN_APPEND);
                 if (fr != FR_OK) {
                     printf("ERROR: Could not open file (%d)\r\n", fr);
+                    filesystemerrcnt ++;
+
                 }
 
                 // Write something to file
@@ -290,17 +330,30 @@ int main() {
                 if (ret < 0) {
                     printf("ERROR: Could not write to file (%d)\r\n", ret);
                     f_close(&fil);
+
+                    filesystemerrcnt++;
                 }
 
                 // Close file
                 fr = f_close(&fil);
                 if (fr != FR_OK) {
                     printf("ERROR: Could not close file (%d)\r\n", fr);
+
+                    filesystemerrcnt++;
                 }
+                /* Update the access time and modification time */
+                
+                /*fno.fdate = (WORD)(((2007 - 1980) * 512U) | 1 * 32U | 9);
+                fno.ftime = (WORD)(9 * 2048U | 41 * 32U | 00 / 2U);
+                fr = f_utime("GPS.txt", &fno);
+                if (fr != FR_OK) {
+                    printf("ERROR: Could not change modification time (%d)\r\n", fr);
+                    filesystemerrcnt++;
+                }*/
             }
         }
 
-        if (state==-1 &&  to_ms_since_boot((get_absolute_time())) - statemillis > 1000) {
+        if (state==-1 &&  to_ms_since_boot((get_absolute_time())) - statemillis > 10) {
             state = 0;
 
             rxbuf[0]=0;
@@ -371,13 +424,24 @@ int main() {
             fr = f_open(&fil, "sensordata.csv", FA_WRITE | FA_OPEN_APPEND);
             if (fr != FR_OK) {
                 printf("ERROR: Could not open file (%d)\r\n", fr);
+
+                filesystemerrcnt ++;
             }
 
+            mutex_enter_blocking(&predictionTfMtx);
+            int32_t usedpressure = pressure_tfpredicted;
+            float predicted_altitude = altitude_tfpredicted;
+            mutex_exit(&predictionTfMtx);
+
             // Write something to file
-            printf("%.3f, %.2f, %d\n", pressure / 1000.f, temperature / 100.f, raw_uv_adc);
-            ret = f_printf(&fil, "%.3f, %.2f, %d\n", pressure / 1000.f, temperature / 100.f, raw_uv_adc);
+            #ifdef VERBOSE_SENSOR_LOG
+            printf("%.3f, %.2f, %d, %d, %.2f\n", pressure / 1000.f, temperature / 100.f, raw_uv_adc, usedpressure, predicted_altitude);
+            #endif
+            ret = f_printf(&fil, "%.3f, %.2f, %d, %d, %.2f\n", pressure / 1000.f, temperature / 100.f, raw_uv_adc, usedpressure, predicted_altitude);
             if (ret < 0) {
                 printf("ERROR: Could not write to file (%d)\r\n", ret);
+
+                filesystemerrcnt ++;
                 f_close(&fil);
             }
 
@@ -385,12 +449,25 @@ int main() {
             fr = f_close(&fil);
             if (fr != FR_OK) {
                 printf("ERROR: Could not close file (%d)\r\n", fr);
+
+                filesystemerrcnt++;
             }
+
+            /*
+            // set time
+            fno.fdate = (WORD)(((2007 - 1980) * 512U) | 1 * 32U | 9);
+            fno.ftime = (WORD)(9 * 2048U | 41 * 32U | 00 / 2U);
+            fr = f_utime("sensordata.csv", &fno);
+            if (fr != FR_OK) {
+                printf("ERROR: Could not change modification time (%d)\r\n", fr);
+                filesystemerrcnt++;
+            }*/
 
             state = -1;
             dma_tx 	= dma_claim_unused_channel(true);
             dma_rx 	= dma_claim_unused_channel(true);   
-            statemillis = to_ms_since_boot((get_absolute_time())); 
+            printf("%.2f Hz, err: %d\n", 1000.0/(to_ms_since_boot((get_absolute_time())) - statemillis), filesystemerrcnt);
+            statemillis = to_ms_since_boot((get_absolute_time()));    
         }
     }
 
