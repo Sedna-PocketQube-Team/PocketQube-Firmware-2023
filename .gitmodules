@@ -1,9 +1,12 @@
-[submodule "lib/no-OS-FatFS-SD-SPI-RPi-Pico"]
-	path = lib/no-OS-FatFS-SD-SPI-RPi-Pico
-	url = https://github.com/carlk3/no-OS-FatFS-SD-SPI-RPi-Pico.git
 [submodule "lib/pico-lora"]
 	path = lib/pico-lora
 	url = https://github.com/akshayabali/pico-lora
 [submodule "lib/pico-tflmicro"]
 	path = lib/pico-tflmicro
 	url = https://github.com/raspberrypi/pico-tflmicro
+[submodule "lib/--force"]
+	path = lib/--force
+	url = https://github.com/Sedna-PocketQube-Team/no-OS-FatFS-SD-SPI-RPi-Pico
+[submodule "lib/no-OS-FatFS-SD-SPI-RPi-Pico"]
+	path = lib/no-OS-FatFS-SD-SPI-RPi-Pico
+	url = https://github.com/Sedna-PocketQube-Team/no-OS-FatFS-SD-SPI-RPi-Pico
