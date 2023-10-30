@@ -4,3 +4,6 @@
 [submodule "lib/pico-lora"]
 	path = lib/pico-lora
 	url = https://github.com/akshayabali/pico-lora
+[submodule "lib/pico-tflmicro"]
+	path = lib/pico-tflmicro
+	url = https://github.com/raspberrypi/pico-tflmicro
