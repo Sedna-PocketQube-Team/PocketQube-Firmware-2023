@@ -73,7 +73,7 @@ static spi_t spis[] = {  // One for each SPI.
 // Hardware Configuration of the SD Card "objects"
 static sd_card_t sd_cards[] = {  // One for each SD card
     {
-        .pcName = "sednaqube:",   // Name used to mount device
+        .pcName = "0:",   // Name used to mount device
         .spi = &spis[0],  // Pointer to the SPI driving this card
         .ss_gpio = 21,    // The SPI slave select GPIO for this SD card
         .use_card_detect = false

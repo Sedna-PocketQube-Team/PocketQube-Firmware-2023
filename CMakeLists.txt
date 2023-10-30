@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.12)
 
 # Build functions from Pico SDK
-include(/Users/cmd/pico/pico-sdk/external/pico_sdk_import.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../pico-sdk/external/pico_sdk_import.cmake)
 
 # Set project name and C/C++ Standards
 project(Sedna C CXX ASM)
@@ -15,15 +15,19 @@ pico_sdk_init()
 # add library
 add_subdirectory(lib/no-OS-FatFS-SD-SPI-RPi-Pico/FatFs_SPI)
 add_subdirectory(lib/pico-lora/src)
+add_subdirectory(lib/pico-tflmicro/)
 
 # Executable source file
 add_executable(${PROJECT_NAME}
     main.cpp
     hw_config.c
     bmp280.c
+    main_functions.cpp
+    model.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC lib/pico-lora/src)
+target_include_directories(${PROJECT_NAME} PUBLIC lib/pico-tflmicro/)
 
 # Create C header file with the name <pio program>.pio.h
 pico_generate_pio_header(${PROJECT_NAME}  
@@ -37,6 +41,8 @@ pico_add_extra_outputs(${PROJECT_NAME})
 target_link_libraries(${PROJECT_NAME}
     pico_stdlib
     pico_time
+    pico_sync
+    pico_multicore
     hardware_clocks
     hardware_uart
     hardware_spi
@@ -49,6 +55,7 @@ target_link_libraries(${PROJECT_NAME}
     hardware_irq
     FatFs_SPI
     LoRa_pico_lib
+    pico-tflmicro
 )
 
 # enable usb output, disable uart output
