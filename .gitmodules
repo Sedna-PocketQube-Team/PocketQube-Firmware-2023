@@ -10,3 +10,6 @@
 [submodule "lib/ADXL345_RP2040"]
 	path = lib/ADXL345_RP2040
 	url = https://github.com/profi248/ADXL345_RP2040
+[submodule "lib/minmea"]
+	path = lib/minmea
+	url = https://github.com/kosma/minmea

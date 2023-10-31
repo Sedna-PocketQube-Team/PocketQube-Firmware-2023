@@ -16,6 +16,7 @@ pico_sdk_init()
 add_subdirectory(lib/no-OS-FatFS-SD-SPI-RPi-Pico/FatFs_SPI)
 add_subdirectory(lib/pico-lora/src)
 add_subdirectory(lib/pico-tflmicro/)
+add_subdirectory(lib/minmea/)
 
 # Executable source file
 add_executable(${PROJECT_NAME}
@@ -31,6 +32,7 @@ target_link_libraries(pico_ADXL345 pico_stdlib hardware_i2c)
 
 target_include_directories(${PROJECT_NAME} PUBLIC lib/pico-lora/src)
 target_include_directories(${PROJECT_NAME} PUBLIC lib/pico-tflmicro/)
+target_include_directories(${PROJECT_NAME} PUBLIC lib/minmea/)
 
 # Create C header file with the name <pio program>.pio.h
 pico_generate_pio_header(${PROJECT_NAME}  
@@ -60,6 +62,7 @@ target_link_libraries(${PROJECT_NAME}
     LoRa_pico_lib
     pico-tflmicro
     pico_ADXL345
+    minmea
 )
 
 # enable usb output, disable uart output

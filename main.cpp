@@ -20,7 +20,9 @@
 #include "ff.h"
 #include "buzzer.pio.h"
 #include "LoRa-RP2040.h"
+#include "minmea.h"
 #include "main_functions.h"
+#include "hw_config.h"
 
 #include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/micro_error_reporter.h"
@@ -65,8 +67,11 @@ auto_init_mutex(predictionTfMtx); // Create a mutex that protects the inference 
 int8_t state = -1;
 int32_t filesystemerrcnt = 0;
 uint32_t statemillis = 0;
+uint32_t lora_location_broadcast_millis = 0;
 
 void core1_loop() {
+    setup(); // TFMicro setup
+
     while (true) {
         // make a copy of the current pressure (so that the inference doesn't block saving data)
         mutex_enter_blocking(&pressureTfMtx);
@@ -99,14 +104,14 @@ int main() {
     if (!LoRa.begin(915E6)) {         // initialize ratio at 915 MHz
         if (true) {
             sleep_ms(3000);
-            printf("LoRa init failed. Check your connections.");                   // if failed, do nothing
+            printf("LoRa init failed. Check your connections.\n");
         }
     } else {
-        sleep_ms(5000);
+        sleep_ms(3000);
+        printf("LoRa init successful!\n");
         LoRa.dumpRegisters();
     }
 
-    setup();
     multicore_launch_core1(core1_loop); // start Tensorflow on second core
 
     // I2C Setup
@@ -127,7 +132,7 @@ int main() {
 
     // GPS Buffer
     static uint8_t buf_idx = 0;
-    static char gpsbuf[256];
+    static char gpsbuf[258];
 
 
     // I2C DMA
@@ -166,21 +171,22 @@ int main() {
 
 
     // GPS Init
-    static char cmd3[] = "$PMTK251,115200*1F\r\n"; // Set 115200 Baud Rate for GPS
+    const char cmd3[] = "$PMTK251,115200*1F\r\n"; // Set 115200 Baud Rate for GPS
     sleep_ms(250);
     uart_write_blocking(UART_ID, (uint8_t*)cmd3, strlen(cmd3));
     sleep_ms(250);
     uart_set_baudrate(UART_ID, 115200); // Change GPS Baud rate once complete
 
-    static char cmd[] = "$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*28\r\n"; // Select GPS data output types
+    const char cmd[] = "$PMTK314,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*29";
+    //const char cmd[] = "$PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0*28\r\n";
     sleep_ms(1000);
     uart_write_blocking(UART_ID, (uint8_t*)cmd, strlen(cmd));
 
-    static char cmd2[] = "$PMTK220,100*2F\r\n"; // 10 Hz GPS Updates
+    const char cmd2[] = "$PMTK220,100*2F\r\n"; // 10 Hz GPS Updates
     sleep_ms(250); 
     uart_write_blocking(UART_ID, (uint8_t*)cmd2, strlen(cmd2));
 
-    static char startlogging[] = "$PMTK185,0*22\r\n"; // Start logging data to internal GPS memory, just in case we need it.
+    const char startlogging[] = "$PMTK185,0*22\r\n"; // Start logging data to internal GPS memory, just in case we need it.
     sleep_ms(250);
     uart_write_blocking(UART_ID, (uint8_t*)startlogging, strlen(startlogging));
 
@@ -295,6 +301,14 @@ int main() {
     */
 
     while(1) {
+        /*if(to_ms_since_boot((get_absolute_time())) - lora_location_broadcast_millis > 2000)
+        {
+            mutex_enter_blocking(&sd_get_by_num(0)->mutex);
+            sleep_ms(100);
+            mutex_exit(&sd_get_by_num(0)->mutex);
+            lora_location_broadcast_millis = to_ms_since_boot((get_absolute_time()));
+        }*/
+
         if (filesystemerrcnt > 10) {
             printf("Resetting SD Card\r\n");
 
@@ -319,39 +333,84 @@ int main() {
         if (uart_is_readable(UART_ID)) {
             uart_read_blocking(UART_ID, (uint8_t*)(gpsbuf+buf_idx), 1);
             buf_idx += 1;
-            if(buf_idx == 256 || gpsbuf[buf_idx-1] == '\n') {
-                gpsbuf[buf_idx-1] = '\0';
+            if(buf_idx == 256 || gpsbuf[buf_idx-1] == '\n' || gpsbuf[buf_idx-1] == '\r') {
+                gpsbuf[buf_idx] = '\0';
                 
-                #ifdef VERBOSE_SENSOR_LOG
+                #ifdef VERBOSE_GPS_LOG
                 puts(gpsbuf);
                 #endif
                 buf_idx = 0;
 
-                // Open file for writing ()
+                // Using minmea library for GPS parsing: https://github.com/kosma/minmea
 
-                fr = f_open(&fil, "GPS.txt", FA_WRITE | FA_OPEN_APPEND);
-                if (fr != FR_OK) {
-                    printf("ERROR: Could not open file (%d)\r\n", fr);
-                    filesystemerrcnt ++;
+                switch (minmea_sentence_id(gpsbuf, false)) {
+                    case MINMEA_SENTENCE_RMC: {
+                        struct minmea_sentence_rmc frame;
+                        if (minmea_parse_rmc(&frame, gpsbuf)) {
+                            printf("$RMC: raw coordinates and speed: (%d/%d,%d/%d) %d/%d\n",
+                                    frame.latitude.value, frame.latitude.scale,
+                                    frame.longitude.value, frame.longitude.scale,
+                                    frame.speed.value, frame.speed.scale);
+                            printf("$RMC fixed-point coordinates and speed scaled to three decimal places: (%d,%d) %d\n",
+                                    minmea_rescale(&frame.latitude, 1000),
+                                    minmea_rescale(&frame.longitude, 1000),
+                                    minmea_rescale(&frame.speed, 1000));
+                            printf("$RMC floating point degree coordinates and speed: (%f,%f) %f\n",
+                                    minmea_tocoord(&frame.latitude),
+                                    minmea_tocoord(&frame.longitude),
+                                    minmea_tofloat(&frame.speed));
+                        }
+                    } break;
 
+                    case MINMEA_SENTENCE_GGA: {
+                        struct minmea_sentence_gga frame;
+                        if (minmea_parse_gga(&frame, gpsbuf)) {
+                            // Open file for writing ()
+                            #ifdef GPS_PARSED_LOG
+                            printf("[%d:%d:%d] $GGA: fix quality: %d, altitude: %d%c, Coordinates: %f %f \n", frame.time.hours, frame.time.minutes, frame.time.seconds, frame.fix_quality, frame.altitude, frame.altitude_units, minmea_tocoord(&frame.latitude), minmea_tocoord(&frame.longitude));
+                            #endif
+
+                            fr = f_open(&fil, "GPS.txt", FA_WRITE | FA_OPEN_APPEND);
+                            if (fr != FR_OK) {
+                                printf("ERROR: Could not open file (%d)\r\n", fr);
+                                filesystemerrcnt ++;
+
+                            }
+
+                            // Write something to file
+                            ret = f_printf(&fil, gpsbuf);
+                            if (ret < 0) {
+                                printf("ERROR: Could not write to file (%d)\r\n", ret);
+                                f_close(&fil);
+
+                                filesystemerrcnt++;
+                            }
+
+                            // Close file
+                            fr = f_close(&fil);
+                            if (fr != FR_OK) {
+                                printf("ERROR: Could not close file (%d)\r\n", fr);
+
+                                filesystemerrcnt++;
+                            }
+                        }
+                    } break;
+
+                    case MINMEA_SENTENCE_GSV: {
+                        struct minmea_sentence_gsv frame;
+                        if (minmea_parse_gsv(&frame, gpsbuf)) {
+                            printf("$GSV: message %d of %d\n", frame.msg_nr, frame.total_msgs);
+                            printf("$GSV: satellites in view: %d\n", frame.total_sats);
+                            for (int i = 0; i < 4; i++)
+                                printf("$GSV: sat nr %d, elevation: %d, azimuth: %d, snr: %d dbm\n",
+                                    frame.sats[i].nr,
+                                    frame.sats[i].elevation,
+                                    frame.sats[i].azimuth,
+                                    frame.sats[i].snr);
+                        }
+                    } break;
                 }
 
-                // Write something to file
-                ret = f_printf(&fil, gpsbuf);
-                if (ret < 0) {
-                    printf("ERROR: Could not write to file (%d)\r\n", ret);
-                    f_close(&fil);
-
-                    filesystemerrcnt++;
-                }
-
-                // Close file
-                fr = f_close(&fil);
-                if (fr != FR_OK) {
-                    printf("ERROR: Could not close file (%d)\r\n", fr);
-
-                    filesystemerrcnt++;
-                }
                 /* Update the access time and modification time */
                 
                 /*fno.fdate = (WORD)(((2007 - 1980) * 512U) | 1 * 32U | 9);
@@ -372,7 +431,6 @@ int main() {
             txbuf[0] = REG_PRESSURE_MSB; //0xD0;
             txbuf[0] |= I2C_IC_DATA_CMD_RESTART_BITS;
             //txbuf[1] |= I2C_IC_DATA_CMD_RESTART_BITS;
-            
 
             for (size_t i = 1; i < BMP_BUFFER_SIZE+1; ++i) {
                 txbuf[i] = I2C_IC_DATA_CMD_CMD_BITS;
@@ -544,7 +602,9 @@ int main() {
             state = -1;
             dma_tx 	= dma_claim_unused_channel(true);
             dma_rx 	= dma_claim_unused_channel(true);   
-            printf("%.2f Hz, err: %d\n", 1000.0/(to_ms_since_boot((get_absolute_time())) - statemillis), filesystemerrcnt);
+            #ifdef HZ_OUTPUT
+            printf("%.2f Hz\n", 1000.0/(to_ms_since_boot((get_absolute_time())) - statemillis));//, filesystemerrcnt);
+            #endif
             statemillis = to_ms_since_boot((get_absolute_time()));    
         }
     }
