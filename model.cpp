@@ -11,6 +11,8 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+Note: The original file provided by The TensorFlow Authors was modified with our own tflite model.
 ==============================================================================*/
 
 // Automatically created from a TensorFlow Lite flatbuffer using the command:

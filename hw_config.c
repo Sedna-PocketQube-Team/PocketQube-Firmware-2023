@@ -14,7 +14,7 @@ specific language governing permissions and limitations under the License.
 
 
 /*
-    Changes to the original file: The SPI and SD_Card values were modified.
+    Changes to the original file: The SPI and SD_Card values were modified in order to be tailored to match the hardware design.
 */
 
 /*

@@ -7,3 +7,6 @@
 [submodule "lib/no-OS-FatFS-SD-SPI-RPi-Pico"]
 	path = lib/no-OS-FatFS-SD-SPI-RPi-Pico
 	url = https://github.com/Sedna-PocketQube-Team/no-OS-FatFS-SD-SPI-RPi-Pico
+[submodule "lib/ADXL345_RP2040"]
+	path = lib/ADXL345_RP2040
+	url = https://github.com/profi248/ADXL345_RP2040

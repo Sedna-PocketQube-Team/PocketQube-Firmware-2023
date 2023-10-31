@@ -15,6 +15,7 @@
 
 #include "qubesettings.h"
 #include "bmp280.h"
+#include "lib/ADXL345_RP2040/ADXL345.h"
 #include "sd_card.h"
 #include "ff.h"
 #include "buzzer.pio.h"
@@ -37,7 +38,10 @@
 #define BAUD_RATE 115200
 #define UART_TX_PIN 0 
 #define UART_RX_PIN 1
-#define BUFFER_SIZE 6
+
+// DMA
+#define BMP_BUFFER_SIZE 6
+#define IMU_BUFFER_SIZE 6
 
 extern "C" {
     void bmp280_init();
@@ -133,7 +137,7 @@ int main() {
 
     // DMA buffers
     static uint16_t txbuf[32];
-    static uint8_t rxbuf[BUFFER_SIZE];
+    static uint8_t rxbuf[BMP_BUFFER_SIZE];
 
 
 
@@ -147,6 +151,13 @@ int main() {
     struct bmp280_calib_param params;
     bmp280_get_calib_params(&params);
     
+
+    #ifdef SEDNA_ACCELEROMETER
+    // Start ADXL345
+    ADXL345 accelerometer = ADXL345();
+    accelerometer.begin();
+    accelerometer.setRange(ADXL345_RANGE_16_G);
+    #endif
 
     // UV Sensor - ADC init
     adc_init();
@@ -363,10 +374,10 @@ int main() {
             //txbuf[1] |= I2C_IC_DATA_CMD_RESTART_BITS;
             
 
-            for (size_t i = 1; i < BUFFER_SIZE+1; ++i) {
+            for (size_t i = 1; i < BMP_BUFFER_SIZE+1; ++i) {
                 txbuf[i] = I2C_IC_DATA_CMD_CMD_BITS;
             }
-            txbuf[BUFFER_SIZE] |= I2C_IC_DATA_CMD_STOP_BITS;
+            txbuf[BMP_BUFFER_SIZE] |= I2C_IC_DATA_CMD_STOP_BITS;
 
             i2c_get_hw(i2c0)->enable = 0;
             i2c_get_hw(i2c0)->tar = 0x76;
@@ -384,7 +395,7 @@ int main() {
                                     &c1,
                                     &i2c_get_hw(i2c0)->data_cmd,	// Write Address
                                     txbuf, 										// Read Address
-                                    BUFFER_SIZE+2,								// Element Count (Each element is of size transfer_data_size)
+                                    BMP_BUFFER_SIZE+2,								// Element Count (Each element is of size transfer_data_size)
                                     true);	 									// DO start directly
             //dma_channel_set_irq1_enabled(dma_tx, true);
 
@@ -397,13 +408,12 @@ int main() {
                                     &rx_config,
                                     rxbuf,
                                     &i2c_get_hw(i2c0)->data_cmd,
-                                    BUFFER_SIZE,
+                                    BMP_BUFFER_SIZE,
                                     true); // START
             
             raw_uv_adc = adc_read();
-        } else if (state == 0 && !dma_channel_is_busy(dma_rx)) {
-            
-
+        } else if (state==0 && !dma_channel_is_busy(dma_rx)) {
+            // DMA Transfer finished
             raw_pressure = (rxbuf[0] << 12) | (rxbuf[1] << 4) | (rxbuf[2] >> 4);
             raw_temperature = (rxbuf[3] << 12) | (rxbuf[4] << 4) | (rxbuf[5] >> 4);
 
@@ -419,7 +429,75 @@ int main() {
 
             dma_channel_unclaim(dma_tx);
             dma_channel_unclaim(dma_rx);
+
+            dma_tx 	= dma_claim_unused_channel(true);
+            dma_rx 	= dma_claim_unused_channel(true); 
+
+            state = 1;
+
+            #ifdef SEDNA_ACCELEROMETER
+
+            rxbuf[0]=0;
+
+            txbuf[0] = 0x32; //0xD0;
+            txbuf[0] |= I2C_IC_DATA_CMD_RESTART_BITS;
+            //txbuf[1] |= I2C_IC_DATA_CMD_RESTART_BITS;
             
+
+            for (size_t i = 1; i < IMU_BUFFER_SIZE+1; ++i) {
+                txbuf[i] = I2C_IC_DATA_CMD_CMD_BITS;
+            }
+            txbuf[IMU_BUFFER_SIZE] |= I2C_IC_DATA_CMD_STOP_BITS;
+
+            i2c_get_hw(i2c0)->enable = 0;
+            i2c_get_hw(i2c0)->tar = 0x53;
+            i2c_get_hw(i2c0)->enable = 1;
+            
+
+
+            dma_channel_config c1 = dma_channel_get_default_config(dma_tx);
+
+            // channel_config_set_transfer_data_size(&_DMA_Transmit_Channel, DMA_SIZE_8);
+            channel_config_set_transfer_data_size(&c1, DMA_SIZE_16);
+            channel_config_set_dreq(&c1, i2c_get_dreq(i2c0, true));
+            channel_config_set_read_increment(&c1, true);
+            channel_config_set_write_increment(&c1, false);
+            dma_channel_configure(	dma_tx,
+                                    &c1,
+                                    &i2c_get_hw(i2c0)->data_cmd,	// Write Address
+                                    txbuf, 										// Read Address
+                                    IMU_BUFFER_SIZE+2,								// Element Count (Each element is of size transfer_data_size)
+                                    true);	 									// DO start directly
+            //dma_channel_set_irq1_enabled(dma_tx, true);
+
+            dma_channel_config rx_config = dma_channel_get_default_config(dma_rx);
+            channel_config_set_transfer_data_size(&rx_config, DMA_SIZE_8);
+            channel_config_set_dreq(&rx_config, i2c_get_dreq(i2c0, false));
+            channel_config_set_read_increment(&rx_config, false);
+            channel_config_set_write_increment(&rx_config, true);
+            dma_channel_configure(  dma_rx,
+                                    &rx_config,
+                                    rxbuf,
+                                    &i2c_get_hw(i2c0)->data_cmd,
+                                    IMU_BUFFER_SIZE,
+                                    true); // START
+            #endif
+            
+        } else if (state == 1 && !dma_channel_is_busy(dma_rx)) {
+            
+            #ifdef SEDNA_ACCELEROMETER
+            int16_t accelX = uint16_t(rxbuf[1]) << 8 | uint16_t(rxbuf[0]);
+            int16_t accelY = uint16_t(rxbuf[3]) << 8 | uint16_t(rxbuf[2]);
+            int16_t accelZ = uint16_t(rxbuf[5]) << 8 | uint16_t(rxbuf[4]);
+            #else
+            int16_t accelX = 0;
+            int16_t accelY = 0;
+            int16_t accelZ = 0;
+            #endif
+
+            dma_channel_unclaim(dma_tx);
+            dma_channel_unclaim(dma_rx);
+
             // Open file for writing ()
             fr = f_open(&fil, "sensordata.csv", FA_WRITE | FA_OPEN_APPEND);
             if (fr != FR_OK) {
@@ -437,7 +515,7 @@ int main() {
             #ifdef VERBOSE_SENSOR_LOG
             printf("%.3f, %.2f, %d, %d, %.2f\n", pressure / 1000.f, temperature / 100.f, raw_uv_adc, usedpressure, predicted_altitude);
             #endif
-            ret = f_printf(&fil, "%.3f, %.2f, %d, %d, %.2f\n", pressure / 1000.f, temperature / 100.f, raw_uv_adc, usedpressure, predicted_altitude);
+            ret = f_printf(&fil, "%.3f, %.2f, %d, %d, %d, %d, %d, %.2f\n", pressure / 1000.f, temperature / 100.f, raw_uv_adc, accelX, accelY, accelZ, predicted_altitude);
             if (ret < 0) {
                 printf("ERROR: Could not write to file (%d)\r\n", ret);
 

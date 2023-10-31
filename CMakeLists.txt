@@ -26,6 +26,9 @@ add_executable(${PROJECT_NAME}
     model.cpp
 )
 
+add_library(pico_ADXL345 lib/ADXL345_RP2040/ADXL345.h lib/ADXL345_RP2040/ADXL345.cpp)
+target_link_libraries(pico_ADXL345 pico_stdlib hardware_i2c)
+
 target_include_directories(${PROJECT_NAME} PUBLIC lib/pico-lora/src)
 target_include_directories(${PROJECT_NAME} PUBLIC lib/pico-tflmicro/)
 
@@ -56,6 +59,7 @@ target_link_libraries(${PROJECT_NAME}
     FatFs_SPI
     LoRa_pico_lib
     pico-tflmicro
+    pico_ADXL345
 )
 
 # enable usb output, disable uart output
