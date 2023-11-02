@@ -10,11 +10,12 @@ Unless required by applicable law or agreed to in writing, software distributed
 under the License is distributed on an AS IS BASIS, WITHOUT WARRANTIES OR
 CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
-*/
 
 
-/*
-    Changes to the original file: The SPI and SD_Card values were modified in order to be tailored to match the hardware design.
+
+Note:   The original file was modified.
+        The SPI and SD_Card values were modified in order to be tailored to 
+        match the hardware design.
 */
 
 /*

@@ -1,11 +1,50 @@
 /**
- * Copyright (c) 2021 Raspberry Pi (Trading) Ltd.
- *
- * SPDX-License-Identifier: BSD-3-Clause
+    The following license applies for everything in this file except bme280_convert_humidity():
+    ____________________________________________________________________________________________
+    
+    Copyright (c) 2021 Raspberry Pi (Trading) Ltd.
+    
+    SPDX-License-Identifier: BSD-3-Clause
+
+    
+    
+    
+    The following license applies for the function bme280_convert_humidity:
+    ____________________________________________________________________________________________
+ 
+    Copyright (c) 2015, Limor Fried & Kevin Townsend for Adafruit Industries 
+    All rights reserved. 
+
+    Redistribution and use in source and binary forms, with or without 
+    modification, are permitted provided that the following conditions are met: 
+
+    * Redistributions of source code must retain the above copyright notice, 
+    this list of conditions and the following disclaimer. 
+    * Redistributions in binary form must reproduce the above copyright 
+    notice, this list of conditions and the following disclaimer in the 
+    documentation and/or other materials provided with the distribution. 
+    * Neither the name of Adafruit Industries nor the names of its 
+    contributors may be used to endorse or promote products derived from 
+    this software without specific prior written permission. 
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" 
+    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
+    ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE 
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
+    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
+    SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
+    INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
+    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
+    ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
+    POSSIBILITY OF SUCH DAMAGE.
  **/
+
+// The original file was modified in order to add support for BME280.
 
 #include <stdio.h>
 #include "bmp280.h"
+#include "qubesettings.h"
 
  /* Example code to talk to a BMP280 temperature and pressure sensor
 
@@ -31,8 +70,8 @@ void bmp280_init() {
     // use the "handheld device dynamic" optimal setting (see datasheet)
     uint8_t buf[2];
 
-    // 500ms sampling time, x16 filter
-    const uint8_t reg_config_val = ((0x04 << 5) | (0x05 << 2)) & 0xFC;
+    // 0.5ms sampling time, x16 filter
+    const uint8_t reg_config_val = ((0x0 << 5) | (0x05 << 2)) & 0xFC;
 
     // send register number followed by its corresponding value
     buf[0] = REG_CONFIG;
@@ -113,17 +152,70 @@ int32_t bmp280_convert_pressure(int32_t pressure, int32_t temp, struct bmp280_ca
     return converted;
 }
 
+#ifdef BM_HUMIDITY
+int32_t bme280_convert_humidity(int32_t humidity, int32_t temp, struct bmp280_calib_param* params) {
+    /*
+        Copyright (c) 2015, Limor Fried & Kevin Townsend for Adafruit Industries 
+        All rights reserved. 
+
+        The license for this function may be found at the top of this file. The original code was modified for compatibility with the rest of the code.
+    */
+
+
+    // This function is described in the BME280 datasheet at page 25 (https://www.mouser.com/datasheet/2/783/BST-BME280-DS002-1509607.pdf).
+    // This function uses the code from Adafruit's BME280 library, since it was easier this way rather than retyping the whole function in the datasheet.
+
+    int32_t t_fine = bmp280_convert(temp, params);
+
+    int32_t var1, var2, var3, var4, var5;
+
+    var1 = t_fine - ((int32_t)76800);
+    var2 = (int32_t)(humidity * 16384);
+    var3 = (int32_t)(((int32_t)params->dig_h4) * 1048576);
+    var4 = ((int32_t)params->dig_h5) * var1;
+    var5 = (((var2 - var3) - var4) + (int32_t)16384) / 32768;
+    var2 = (var1 * ((int32_t)params->dig_h6)) / 1024;
+    var3 = (var1 * ((int32_t)params->dig_h3)) / 2048;
+    var4 = ((var2 * (var3 + (int32_t)32768)) / 1024) + (int32_t)2097152;
+    var2 = ((var4 * ((int32_t)params->dig_h2)) + 8192) / 16384;
+    var3 = var5 * var2;
+    var4 = ((var3 / 32768) * (var3 / 32768)) / 128;
+    var5 = var3 - ((var4 * ((int32_t)params->dig_h1)) / 16);
+    var5 = (var5 < 0 ? 0 : var5);
+    var5 = (var5 > 419430400 ? 419430400 : var5);
+    uint32_t H = (uint32_t)(var5 / 4096);
+
+    return H;
+
+    /*
+        The rest of the code is now subject to the original license, included at the beginning of this file
+    */
+}
+#endif
+
 void bmp280_get_calib_params(struct bmp280_calib_param* params) {
     // raw temp and pressure values need to be calibrated according to
     // parameters generated during the manufacturing of the sensor
     // there are 3 temperature params, and 9 pressure params, each with a LSB
     // and MSB register, so we read from 24 registers
 
-    uint8_t buf[NUM_CALIB_PARAMS] = { 0 };
+    uint8_t buf[33] = { 0 };
     uint8_t reg = REG_DIG_T1_LSB;
     i2c_write_blocking(i2c_default, ADDR, &reg, 1, true);  // true to keep master control of bus
     // read in one go as register addresses auto-increment
-    i2c_read_blocking(i2c_default, ADDR, buf, NUM_CALIB_PARAMS, false);  // false, we're done reading
+    i2c_read_blocking(i2c_default, ADDR, buf, NUM_CALIB_PARAMS, true);  // true to keep master control of bus
+
+    // read dig_H1:
+    reg = 0xA1;
+    i2c_write_blocking(i2c_default, ADDR, &reg, 1, true);  // true to keep master control of bus
+    // read in one go as register addresses auto-increment
+    i2c_read_blocking(i2c_default, ADDR, buf+23, 1, true);  // true to keep master control of bus
+
+    // read the other humidity:
+    reg = 0xE1;
+    i2c_write_blocking(i2c_default, ADDR, &reg, 1, true);  // true to keep master control of bus
+    // read in one go as register addresses auto-increment
+    i2c_read_blocking(i2c_default, ADDR, buf+24, 8, false);  // false, we're done reading
 
     // store these in a struct for later use
     params->dig_t1 = (uint16_t)(buf[1] << 8) | buf[0];
@@ -139,6 +231,15 @@ void bmp280_get_calib_params(struct bmp280_calib_param* params) {
     params->dig_p7 = (int16_t)(buf[19] << 8) | buf[18];
     params->dig_p8 = (int16_t)(buf[21] << 8) | buf[20];
     params->dig_p9 = (int16_t)(buf[23] << 8) | buf[22];
+
+    #ifdef BM_HUMIDITY
+    params->dig_h1 = buf[24];
+    params->dig_h2 = (int16_t)(buf[26] << 8) | buf[25];
+    params->dig_h3 = buf[27];
+    params->dig_h4 = (int16_t)(buf[28] << 4) | buf[29];
+    params->dig_h5 = (int16_t)(buf[31] << 4) | buf[30];
+    params->dig_h3 = (int8_t)buf[32];
+    #endif
 }
 
 #endif

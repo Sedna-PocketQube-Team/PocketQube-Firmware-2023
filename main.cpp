@@ -50,6 +50,10 @@ extern "C" {
     void bmp280_get_calib_params(bmp280_calib_param*);
     int32_t bmp280_convert_temp(long, bmp280_calib_param*);
     int32_t bmp280_convert_pressure(long, long, bmp280_calib_param*);
+
+    #ifdef BM_HUMIDITY
+    int32_t bme280_convert_humidity(int32_t, int32_t, struct bmp280_calib_param* params) ;
+    #endif
 }
 
 // sensor data:
@@ -58,6 +62,7 @@ int32_t raw_pressure;
 uint16_t raw_uv_adc;
 int32_t temperature;
 int32_t pressure;
+uint32_t humidity;
 int32_t pressure_tfpredicted;
 float altitude_tfpredicted;
 auto_init_mutex(pressureTfMtx); // Create a mutex that protects the "pressure" variable from being accessed by 2 threads (tensorflow and main code) at the same time
@@ -476,7 +481,10 @@ int main() {
             raw_temperature = (rxbuf[3] << 12) | (rxbuf[4] << 4) | (rxbuf[5] >> 4);
 
             // BME 280 Extra humidity:
-            //int32_t raw_humidity = (rxbuf[6] << 8) | (rxbuf[7]);
+            #ifdef BM_HUMIDITY
+            int32_t raw_humidity = (rxbuf[6] << 8) | (rxbuf[7]);
+            humidity = bme280_convert_humidity(raw_humidity, raw_temperature, &params);
+            #endif
             
 
             
@@ -573,7 +581,7 @@ int main() {
             #ifdef VERBOSE_SENSOR_LOG
             printf("%.3f, %.2f, %d, %d, %.2f\n", pressure / 1000.f, temperature / 100.f, raw_uv_adc, usedpressure, predicted_altitude);
             #endif
-            ret = f_printf(&fil, "%.3f, %.2f, %d, %d, %d, %d, %d, %.2f\n", pressure / 1000.f, temperature / 100.f, raw_uv_adc, accelX, accelY, accelZ, predicted_altitude);
+            ret = f_printf(&fil, "%.3f, %.2f, %.2f, %d, %d, %d, %d, %d, %.2f\n", pressure / 1000.f, temperature / 100.f, humidity/1024.f, raw_uv_adc, accelX, accelY, accelZ, predicted_altitude);
             if (ret < 0) {
                 printf("ERROR: Could not write to file (%d)\r\n", ret);
 

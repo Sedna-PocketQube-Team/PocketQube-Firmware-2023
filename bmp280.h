@@ -12,6 +12,7 @@
 #include "hardware/i2c.h"
 #include "pico/binary_info.h"
 #include "pico/stdlib.h"
+#include "qubesettings.h"
 
  /* Example code to talk to a BMP280 temperature and pressure sensor
 
@@ -92,6 +93,16 @@ struct bmp280_calib_param {
     int16_t dig_p7;
     int16_t dig_p8;
     int16_t dig_p9;
+
+    #ifdef BM_HUMIDITY
+    // humidity params if BME280
+    uint8_t dig_h1;
+    int16_t dig_h2;
+    uint8_t dig_h3;
+    int16_t dig_h4;
+    int16_t dig_h5;
+    int8_t  dig_h6;
+    #endif
 };
 
 #ifdef i2c_default
