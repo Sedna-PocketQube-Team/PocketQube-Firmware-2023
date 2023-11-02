@@ -21,5 +21,5 @@ This repository uses code from various library and sources with multiple licensi
 The libraries in [the lib folder](/lib) are included as git submodules. You may find their corresponding license inside each submodule.
 Other files such as [bmp280.c](bmp280.c) have license information at the top of each file.
  
-For any other files, the [LICENSE.md](LICENSE.md) license applies, except to [sedna-banner.png](sedna-banner.png), which may not be reused in any way.
+For any other files, the [LICENSE](LICENSE) file applies, except to [sedna-banner.png](sedna-banner.png), which may not be reused in any way.
 
