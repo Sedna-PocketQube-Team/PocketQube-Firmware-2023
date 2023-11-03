@@ -721,7 +721,14 @@ int main() {
             s.usedpressure = usedpressure;
             s.predicted_altitude = predicted_altitude;
 
-            data_queue.push_back(s);
+            mutex_enter_blocking(&sdSaveMtx);
+            if (data_queue.size() >= DATA_CACHING_MAX_ELEMENTS) {
+                data_queue.pop_back();
+                data_queue.push_back(s);
+            } else {
+                data_queue.push_back(s);
+            }
+            mutex_exit(&sdSaveMtx);
 
             #else
 

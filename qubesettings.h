@@ -6,6 +6,7 @@
 //#define GPS_PARSED_LOG
 #define BM_HUMIDITY
 #define DATA_CACHING 10
+#define DATA_CACHING_MAX_ELEMENTS 100
 #define SECOND_THREAD_SD
 //#define lora_location_broadcast_millis 0
 //#define VERBOSE_SENSOR_LOG
