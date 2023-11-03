@@ -12,6 +12,7 @@
 #include "hardware/clocks.h"
 
 #include "string.h"
+#include <vector>
 
 #include "qubesettings.h"
 #include "bmp280.h"
@@ -22,6 +23,7 @@
 #include "LoRa-RP2040.h"
 #include "minmea.h"
 #include "main_functions.h"
+#include "sattelite_data.hpp"
 #include "hw_config.h"
 
 #include "tensorflow/lite/micro/all_ops_resolver.h"
@@ -56,6 +58,14 @@ extern "C" {
     #endif
 }
 
+// SD Card
+FRESULT fr;
+FATFS fs;
+FIL fil;
+FILINFO fno;
+int ret;
+char buf[100];
+
 // sensor data:
 int32_t raw_temperature;
 int32_t raw_pressure;
@@ -68,11 +78,17 @@ float altitude_tfpredicted;
 auto_init_mutex(pressureTfMtx); // Create a mutex that protects the "pressure" variable from being accessed by 2 threads (tensorflow and main code) at the same time
 auto_init_mutex(predictionTfMtx); // Create a mutex that protects the inference results from being accessed by 2 threads (tensorflow and main code) at the same time
 
+#ifdef DATA_CACHING
+// sensor data queue
+//sattelite_sensor_data data_queue[DATA_CACHING];
+std::vector<sattelite_sensor_data> data_queue;
+std::vector<gps_data> gps_queue;
+auto_init_mutex(sdSaveMtx);
+#endif
 
 int8_t state = -1;
 int32_t filesystemerrcnt = 0;
 uint32_t statemillis = 0;
-uint32_t lora_location_broadcast_millis = 0;
 
 void core1_loop() {
     setup(); // TFMicro setup
@@ -94,7 +110,63 @@ void core1_loop() {
         }
 
         // wait 800ms
-        sleep_ms(800);
+        #ifdef SECOND_THREAD_SD
+        mutex_enter_blocking(&sdSaveMtx);
+        if (data_queue.size() >= DATA_CACHING) {
+            std::vector<sattelite_sensor_data> data_queue_copy = data_queue;
+            std::vector<gps_data> gps_queue_copy = gps_queue;
+
+            mutex_exit(&sdSaveMtx);
+
+            // Open file for writing
+            fr = f_open(&fil, "sensordata.csv", FA_WRITE | FA_OPEN_APPEND);
+            if (fr != FR_OK) {
+                printf("ERROR: Could not open file (%d)\r\n", fr);
+
+                filesystemerrcnt ++;
+                break;
+            }
+
+            for(int i=0; i<data_queue_copy.size(); i++) {
+                ret = f_printf(&fil, "%u, %.3f, %.2f, %.2f, %d, %d, %d, %d, %d, %.2f\n", data_queue_copy[i].ms_since_boot, data_queue_copy[i].pressure / 1000.f, data_queue_copy[i].temperature / 100.f, data_queue_copy[i].humidity/1024.f, data_queue_copy[i].raw_uv_adc, data_queue_copy[i].accelX, data_queue_copy[i].accelY, data_queue_copy[i].accelZ, data_queue_copy[i].usedpressure, data_queue_copy[i].predicted_altitude);
+                if (ret < 0) {
+                    printf("ERROR: Could not write to file (%d)\r\n", ret);
+
+                    filesystemerrcnt ++;
+                    f_close(&fil);
+                    break;
+                }
+            }
+
+            for(int i=0; i<gps_queue_copy.size(); i++) {
+                ret = f_printf(&fil, "[GPS] %d:%d:%d %d %.2f %c | %.2f %.2f\n", gps_queue_copy[i].hours, gps_queue_copy[i].minutes, gps_queue_copy[i].seconds, gps_queue_copy[i].fix_quality, gps_queue_copy[i].altitude, gps_queue_copy[i].altitude_units, gps_queue_copy[i].latitude, gps_queue_copy[i].longitude);
+                if (ret < 0) {
+                    printf("ERROR: Could not write to file (%d)\r\n", ret);
+
+                    filesystemerrcnt ++;
+                    f_close(&fil);
+                    break;
+                }
+            }
+
+            // Close file
+            fr = f_close(&fil);
+            if (fr != FR_OK) {
+                printf("ERROR: Could not close file (%d)\r\n", fr);
+
+                filesystemerrcnt++;
+                break;
+            }
+
+            mutex_enter_blocking(&sdSaveMtx);
+            // no errors! clear the queues
+            data_queue.clear();
+            gps_queue.clear();
+            mutex_exit(&sdSaveMtx);
+        } else {
+            mutex_exit(&sdSaveMtx);
+        }
+        #endif
     }
 }
 
@@ -116,8 +188,6 @@ int main() {
         printf("LoRa init successful!\n");
         LoRa.dumpRegisters();
     }
-
-    multicore_launch_core1(core1_loop); // start Tensorflow on second core
 
     // I2C Setup
     i2c_init(I2C_PORT, 400000);
@@ -200,16 +270,6 @@ int main() {
 
     sleep_ms(250);
 
-
-    // SD Card
-    FRESULT fr;
-    FATFS fs;
-    FIL fil;
-    FILINFO fno;
-
-
-    int ret;
-    char buf[100];
 
     // Initialize SD card
     if (!sd_init_driver()) {
@@ -305,6 +365,8 @@ int main() {
               0) When DMA finished, save data & go to state -1)
     */
 
+    multicore_launch_core1(core1_loop); // start Tensorflow on second core
+
     while(1) {
         /*if(to_ms_since_boot((get_absolute_time())) - lora_location_broadcast_millis > 2000)
         {
@@ -313,6 +375,56 @@ int main() {
             mutex_exit(&sd_get_by_num(0)->mutex);
             lora_location_broadcast_millis = to_ms_since_boot((get_absolute_time()));
         }*/
+        
+        #ifdef DATA_CACHING
+        #ifndef SECOND_THREAD_SD
+        if (data_queue.size() >= DATA_CACHING) {
+            // Open file for writing
+            fr = f_open(&fil, "sensordata.csv", FA_WRITE | FA_OPEN_APPEND);
+            if (fr != FR_OK) {
+                printf("ERROR: Could not open file (%d)\r\n", fr);
+
+                filesystemerrcnt ++;
+                break;
+            }
+
+            for(int i=0; i<data_queue.size(); i++) {
+                ret = f_printf(&fil, "%u, %.3f, %.2f, %.2f, %d, %d, %d, %d, %d, %.2f\n", data_queue[i].ms_since_boot, data_queue[i].pressure / 1000.f, data_queue[i].temperature / 100.f, data_queue[i].humidity/1024.f, data_queue[i].raw_uv_adc, data_queue[i].accelX, data_queue[i].accelY, data_queue[i].accelZ, data_queue[i].usedpressure, data_queue[i].predicted_altitude);
+                if (ret < 0) {
+                    printf("ERROR: Could not write to file (%d)\r\n", ret);
+
+                    filesystemerrcnt ++;
+                    f_close(&fil);
+                    break;
+                }
+            }
+
+            for(int i=0; i<gps_queue.size(); i++) {
+                ret = f_printf(&fil, "[GPS] %d:%d:%d %d %.2f %c | %.2f %.2f\n", gps_queue[i].hours, gps_queue[i].minutes, gps_queue[i].seconds, gps_queue[i].fix_quality, gps_queue[i].altitude, gps_queue[i].altitude_units, gps_queue[i].latitude, gps_queue[i].longitude);
+                if (ret < 0) {
+                    printf("ERROR: Could not write to file (%d)\r\n", ret);
+
+                    filesystemerrcnt ++;
+                    f_close(&fil);
+                    break;
+                }
+            }
+
+            // Close file
+            fr = f_close(&fil);
+            if (fr != FR_OK) {
+                printf("ERROR: Could not close file (%d)\r\n", fr);
+
+                filesystemerrcnt++;
+                break;
+            }
+
+            // no errors! clear the queues
+            data_queue.clear();
+            gps_queue.clear();
+        }
+        #endif
+        #endif
 
         if (filesystemerrcnt > 10) {
             printf("Resetting SD Card\r\n");
@@ -372,8 +484,24 @@ int main() {
                         if (minmea_parse_gga(&frame, gpsbuf)) {
                             // Open file for writing ()
                             #ifdef GPS_PARSED_LOG
-                            printf("[%d:%d:%d] $GGA: fix quality: %d, altitude: %d%c, Coordinates: %f %f \n", frame.time.hours, frame.time.minutes, frame.time.seconds, frame.fix_quality, frame.altitude, frame.altitude_units, minmea_tocoord(&frame.latitude), minmea_tocoord(&frame.longitude));
+                            printf("[%d:%d:%d] $GGA: fix quality: %d, altitude: %d%c, Coordinates: %f %f \n", frame.time.hours, frame.time.minutes, frame.time.seconds, frame.fix_quality, minmea_tofloat(&frame.altitude), frame.altitude_units, minmea_tocoord(&frame.latitude), minmea_tocoord(&frame.longitude));
                             #endif
+
+                            #ifdef DATA_CACHING
+
+                            gps_data g;
+                            g.hours = frame.time.hours;
+                            g.minutes = frame.time.minutes;
+                            g.seconds = frame.time.seconds;
+                            g.fix_quality = frame.fix_quality;
+                            g.altitude = minmea_tofloat(&frame.altitude);
+                            g.altitude_units = frame.altitude_units;
+                            g.latitude = minmea_tofloat(&frame.latitude);
+                            g.longitude = minmea_tofloat(&frame.longitude);
+
+                            gps_queue.push_back(g);
+
+                            #else
 
                             fr = f_open(&fil, "GPS.txt", FA_WRITE | FA_OPEN_APPEND);
                             if (fr != FR_OK) {
@@ -398,6 +526,8 @@ int main() {
 
                                 filesystemerrcnt++;
                             }
+
+                            #endif
                         }
                     } break;
 
@@ -428,7 +558,7 @@ int main() {
             }
         }
 
-        if (state==-1 &&  to_ms_since_boot((get_absolute_time())) - statemillis > 10) {
+        if (state==-1 &&  to_ms_since_boot((get_absolute_time())) - statemillis > 1) {
             state = 0;
 
             rxbuf[0]=0;
@@ -564,14 +694,6 @@ int main() {
             dma_channel_unclaim(dma_tx);
             dma_channel_unclaim(dma_rx);
 
-            // Open file for writing ()
-            fr = f_open(&fil, "sensordata.csv", FA_WRITE | FA_OPEN_APPEND);
-            if (fr != FR_OK) {
-                printf("ERROR: Could not open file (%d)\r\n", fr);
-
-                filesystemerrcnt ++;
-            }
-
             mutex_enter_blocking(&predictionTfMtx);
             int32_t usedpressure = pressure_tfpredicted;
             float predicted_altitude = altitude_tfpredicted;
@@ -581,6 +703,36 @@ int main() {
             #ifdef VERBOSE_SENSOR_LOG
             printf("%.3f, %.2f, %d, %d, %.2f\n", pressure / 1000.f, temperature / 100.f, raw_uv_adc, usedpressure, predicted_altitude);
             #endif
+
+            #ifdef DATA_CACHING
+
+            sattelite_sensor_data s;
+
+            s.ms_since_boot = to_ms_since_boot((get_absolute_time()));
+            s.temperature = temperature;
+            mutex_enter_blocking(&pressureTfMtx);
+            s.pressure = pressure;
+            mutex_exit(&pressureTfMtx);
+            s.humidity = humidity;
+            s.raw_uv_adc = raw_uv_adc;
+            s.accelX = accelX;
+            s.accelY = accelY;
+            s.accelZ = accelZ;
+            s.usedpressure = usedpressure;
+            s.predicted_altitude = predicted_altitude;
+
+            data_queue.push_back(s);
+
+            #else
+
+            // Open file for writing ()
+            fr = f_open(&fil, "sensordata.csv", FA_WRITE | FA_OPEN_APPEND);
+            if (fr != FR_OK) {
+                printf("ERROR: Could not open file (%d)\r\n", fr);
+
+                filesystemerrcnt ++;
+            }
+
             ret = f_printf(&fil, "%.3f, %.2f, %.2f, %d, %d, %d, %d, %d, %.2f\n", pressure / 1000.f, temperature / 100.f, humidity/1024.f, raw_uv_adc, accelX, accelY, accelZ, predicted_altitude);
             if (ret < 0) {
                 printf("ERROR: Could not write to file (%d)\r\n", ret);
@@ -597,6 +749,8 @@ int main() {
                 filesystemerrcnt++;
             }
 
+            #endif
+
             /*
             // set time
             fno.fdate = (WORD)(((2007 - 1980) * 512U) | 1 * 32U | 9);
@@ -611,7 +765,7 @@ int main() {
             dma_tx 	= dma_claim_unused_channel(true);
             dma_rx 	= dma_claim_unused_channel(true);   
             #ifdef HZ_OUTPUT
-            printf("%.2f Hz\n", 1000.0/(to_ms_since_boot((get_absolute_time())) - statemillis));//, filesystemerrcnt);
+            printf("%d ms %.2f Hz\n", (to_ms_since_boot((get_absolute_time())) - statemillis), 1000.0/(to_ms_since_boot((get_absolute_time())) - statemillis));//, filesystemerrcnt);
             #endif
             statemillis = to_ms_since_boot((get_absolute_time()));    
         }
